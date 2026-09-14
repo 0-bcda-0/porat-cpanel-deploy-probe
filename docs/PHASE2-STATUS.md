@@ -1,6 +1,6 @@
 # Phase 2 cPanel UAPI capability probe status
 
-Last updated: 2026-09-14 UTC
+Last updated: 2026-09-14 UTC (after Run #5)
 
 ## Purpose
 
@@ -44,17 +44,25 @@ All local safety tests passed on GitHub-hosted Ubuntu 24.04. Normal TLS worked, 
 
 This proves that the current blocker is no longer basic GitHub networking, TLS, HTTP classification, or the earlier wrong-account 403. The next evidence needed is the non-sensitive structure of the first UAPI response envelope.
 
-## Current diagnostic hypothesis
+### Run #5 — live cp077 uses a flattened UAPI result envelope
 
-The first response is valid JSON but has a `result.status` value other than success while `result.errors` is null or absent. We do not yet know whether this is specific to `Variables/get_user_information`, a cPanel/MyDataKnox API behavior difference, or a capability/authorization limitation. Do not guess or broaden the probe until the envelope structure is observed safely.
+Run `34830289792`, SHA `4b49a798056141c15859d11da039337043f7f14d`.
 
-## Next change / Run #5
+All local safety tests passed. The live probe again stopped before Fileman or Git deployment actions, but the diagnostic artifact was successfully retained. `first-uapi-envelope.json` reported the exact top-level key set `data`, `errors`, `messages`, `metadata`, `status`, and `warnings`; there was no `result` object and no `apiversion`, `module`, or `func` wrapper.
 
-Run #5 adds a safe envelope summarizer that records only structure and types: top-level keys, API version when scalar, result keys, `result.status`, and the types of `data`, `errors`, `messages`, `warnings`, and `metadata`. It must never print raw response values, user information, the API token, or the raw body.
+This is the key evidence from Run #5. Official cPanel UAPI documentation normally shows the transport response wrapped as `apiversion`/`module`/`func` plus a nested `result` object, while the live cp077 `/execute/...` response observed through MyDataKnox exposes the inner result object directly. The previous parser therefore interpreted a valid flattened result as a failure because it only read `.result.status`, `.result.data`, and `.result.errors`.
 
-`run-live-probe` writes that structural summary to `probe-results/first-uapi-envelope.json` before invoking the existing success parser. Because the artifact upload step uses `if: always()`, a failed first UAPI request can still leave a non-secret diagnostic artifact for inspection.
+No sensitive response values were captured; only key names and value types were retained.
 
-Run #5 remains a diagnostic run. If the first UAPI call still reports failure, stop after collecting the safe structure and diagnose that evidence before attempting Fileman or Git deployment changes.
+## Current root-cause hypothesis
+
+The immediate blocker is a response-envelope compatibility mismatch in the probe client, not basic TLS, HTTP transport, or the earlier wrong-account token. The live cp077 endpoint returns the UAPI result payload flattened at the top level for the tested call. The probe must accept both the canonical nested cPanel form and this observed flattened form while continuing to fail closed on unknown shapes.
+
+## Next change / Run #6
+
+Run #6 adds dual-envelope parsing. A response is accepted only when it is either the canonical object with a `result` object or the observed flattened object containing `status` plus `data` or `errors`. Unknown JSON shapes remain rejected. The safe summarizer also records `envelope_shape` as `nested-result`, `flat-result`, or `unknown` without exposing response values.
+
+Tests cover the new flattened success path before the implementation. If the first live UAPI call succeeds under this parser, the probe may continue into the already-approved isolated Phase 2 capability checks under `/home/echosline/cpanel-deploy-probe`. Any new failure is to be treated as the next evidence point; do not broaden scope to Porat Staff live roots, production, databases, weather, or SSH/SCP replacement.
 
 ## Adoption gates still outstanding
 

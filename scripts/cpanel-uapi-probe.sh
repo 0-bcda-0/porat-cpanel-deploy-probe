@@ -43,19 +43,28 @@ summarize_response_file() {
     safe_error 'Malformed UAPI JSON response'
     return 65
   fi
-  jq -c '{
-    top_level_keys:(keys|sort),
-    apiversion:(if (.apiversion|type) == "number" or (.apiversion|type) == "string" then .apiversion else null end),
-    module_type:(.module|type),
-    func_type:(.func|type),
-    result_keys:(if (.result|type) == "object" then (.result|keys|sort) else [] end),
-    status:.result.status,
-    data_type:(.result.data|type),
-    errors_type:(.result.errors|type),
-    messages_type:(.result.messages|type),
-    warnings_type:(.result.warnings|type),
-    metadata_type:(.result.metadata|type)
-  }' "$response_file"
+  jq -c '
+    def payload:
+      if (.result|type) == "object" then .result
+      elif (type == "object" and has("status") and (has("data") or has("errors"))) then .
+      else null
+      end;
+    (payload) as $payload |
+    {
+      top_level_keys:(keys|sort),
+      envelope_shape:(if (.result|type) == "object" then "nested-result" elif $payload != null then "flat-result" else "unknown" end),
+      apiversion:(if (.apiversion|type) == "number" or (.apiversion|type) == "string" then .apiversion else null end),
+      module_type:(.module|type),
+      func_type:(.func|type),
+      result_keys:(if (.result|type) == "object" then (.result|keys|sort) else [] end),
+      status:($payload.status // null),
+      data_type:($payload.data|type),
+      errors_type:($payload.errors|type),
+      messages_type:($payload.messages|type),
+      warnings_type:($payload.warnings|type),
+      metadata_type:($payload.metadata|type)
+    }
+  ' "$response_file"
 }
 
 parse_response() {
@@ -64,13 +73,17 @@ parse_response() {
     safe_error 'Malformed UAPI JSON response'
     return 65
   fi
-  status="$(jq -r '.result.status // empty' "$response_file")"
+  if ! jq -e '(.result|type) == "object" or (type == "object" and has("status") and (has("data") or has("errors")))' "$response_file" >/dev/null 2>&1; then
+    safe_error 'Unrecognized UAPI response envelope'
+    return 65
+  fi
+  status="$(jq -r 'if (.result|type) == "object" then .result.status else .status end // empty' "$response_file")"
   if [[ "$status" != 1 ]]; then
-    errors="$(jq -c '.result.errors // ["unspecified UAPI error"]' "$response_file")"
+    errors="$(jq -c 'if (.result|type) == "object" then (.result.errors // ["unspecified UAPI error"]) else (.errors // ["unspecified UAPI error"]) end' "$response_file")"
     safe_error "UAPI request failed: $errors"
     return 1
   fi
-  data="$(jq -c '.result.data' "$response_file")"
+  data="$(jq -c 'if (.result|type) == "object" then .result.data else .data end' "$response_file")"
   printf '%s\n' "$data"
 }
 

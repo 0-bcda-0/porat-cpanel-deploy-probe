@@ -33,6 +33,14 @@ printf '%s\n' '{"result":{"status":1,"data":{"deploy_id":"41"},"errors":null}}' 
 [[ "$(CPANEL_API_TOKEN=dummy "$probe" parse-response "$test_root/success.json")" == '{"deploy_id":"41"}' ]] || fail 'successful UAPI data was not returned'
 pass 'UAPI success parsing'
 
+printf '%s\n' '{"status":1,"data":{"deploy_id":"42"},"errors":null,"messages":null,"metadata":{},"warnings":null}' >"$test_root/flat-success.json"
+[[ "$(CPANEL_API_TOKEN=dummy "$probe" parse-response "$test_root/flat-success.json")" == '{"deploy_id":"42"}' ]] || fail 'flattened UAPI success envelope was not parsed'
+flat_summary="$(CPANEL_API_TOKEN=dummy "$probe" summarize-response "$test_root/flat-success.json")"
+grep -Fq '"envelope_shape":"flat-result"' <<<"$flat_summary" || fail 'flattened UAPI envelope shape was not identified'
+grep -Fq '"status":1' <<<"$flat_summary" || fail 'flattened UAPI summary omitted top-level status'
+grep -Fq '"data_type":"object"' <<<"$flat_summary" || fail 'flattened UAPI summary omitted data type'
+pass 'flattened UAPI success parsing and safe summary'
+
 secret='probe-token-must-not-leak'
 printf '%s\n' "{\"result\":{\"status\":0,\"data\":null,\"errors\":[\"denied $secret\"]}}" >"$test_root/failure.json"
 set +e

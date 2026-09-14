@@ -202,21 +202,42 @@ uapi_envelope_summary() {
 
 poll_deployment() {
   local deploy_id="$1" attempts="${CPANEL_POLL_MAX_ATTEMPTS:-30}"
-  local interval="${CPANEL_POLL_INTERVAL_SECONDS:-5}" attempt data state
-  [[ "$deploy_id" =~ ^[A-Za-z0-9._:-]+$ ]] || { safe_error 'Invalid deployment task ID'; return 64; }
+  local interval="${CPANEL_POLL_INTERVAL_SECONDS:-5}" attempt data entry state
+  [[ "$deploy_id" =~ ^[A-Za-z0-9._:/-]+$ ]] || { safe_error 'Invalid deployment task ID'; return 64; }
   [[ "$attempts" =~ ^[1-9][0-9]*$ ]] || { safe_error 'Invalid polling attempt bound'; return 64; }
   [[ "$interval" =~ ^[0-9]+$ ]] || { safe_error 'Invalid polling interval'; return 64; }
 
   for ((attempt = 1; attempt <= attempts; attempt++)); do
     data="$(uapi_get 'VersionControlDeployment/retrieve')"
-    state="$(jq -r --arg id "$deploy_id" '
-      [.[] | select(((.id // .deploy_id // "") | tostring) == $id)][0]
-      | (.state // .status // empty)
+    entry="$(jq -c --arg id "$deploy_id" '
+      [.[] | select(type == "object" and (
+        (((.deploy_id // "") | tostring) == $id) or
+        (((.task_id // "") | tostring) == $id) or
+        (((.id // "") | tostring) == $id)
+      ))][0] // empty
     ' <<<"$data")"
-    if [[ -z "$state" ]]; then
+
+    if [[ -z "$entry" ]]; then
+      if ((attempt < attempts)); then
+        sleep "$interval"
+        continue
+      fi
       safe_error 'Deployment task was not present in retrieve response'
       return 65
     fi
+
+    state="$(jq -r '
+      if (.timestamps | type) == "object" then
+        if .timestamps.failed? != null then "failed"
+        elif .timestamps.succeeded? != null then "succeeded"
+        elif .timestamps.active? != null then "active"
+        elif .timestamps.queued? != null then "queued"
+        else empty end
+      else
+        (.state // .status // empty)
+      end
+    ' <<<"$entry")"
+
     case "$state" in
       success|succeeded|complete|completed)
         printf 'Deployment task %s succeeded with status %s\n' "$deploy_id" "$state"
@@ -226,7 +247,11 @@ poll_deployment() {
         safe_error "Deployment task $deploy_id failed with status $state"
         return 1
         ;;
-      queued|waiting|pending|processing|running)
+      queued|waiting|pending|processing|running|active)
+        ;;
+      '')
+        safe_error 'Unexpected deployment status: <none>'
+        return 65
         ;;
       *)
         safe_error "Unexpected deployment status: $state"
@@ -405,6 +430,34 @@ run_live_probe() {
     printf '\n## Controller execution environment\n\n```text\n%s\n```\n' "$(cut -d'|' -f3- <<<"$second")"
     printf '\nThe deliberate non-zero command was reported as a failed deployment task. Each uploaded request ID was recovered from its controller result and correlated with the task ID returned by `VersionControlDeployment::create`.\n'
   } >probe-results/observations.md
+
+  jq -n \
+    --arg bootstrap_id "$bootstrap_id" \
+    --arg first_id "${first%%|*}" \
+    --arg second_id "${second%%|*}" \
+    --arg failure_id "${deliberate%%|*}" \
+    --arg controller_head "$first_head" \
+    '{
+      api_https_tls:true,
+      flattened_uapi_envelope:true,
+      controller_repository:true,
+      deployment_create:true,
+      deployment_retrieve:true,
+      timestamp_status_model:true,
+      fileman_relative_upload:true,
+      fileman_absolute_upload:true,
+      fileman_overwrite:true,
+      request_result_correlation:true,
+      successful_worker_execution:true,
+      deliberate_failure_propagation:true,
+      unchanged_head_retrigger:true,
+      bounded_polling:true,
+      bootstrap_deploy_id:$bootstrap_id,
+      first_success_deploy_id:$first_id,
+      second_success_deploy_id:$second_id,
+      deliberate_failure_deploy_id:$failure_id,
+      controller_head:$controller_head
+    }' >probe-results/capabilities.json
 }
 
 usage() {

@@ -38,6 +38,8 @@ temporary="$results/.$request_id.result.$$"
   printf 'realpath=%s\n' "$(command -v realpath 2>/dev/null || printf unavailable)"
   printf 'php=%s\n' "$(command -v php 2>/dev/null || printf unavailable)"
   printf 'curl=%s\n' "$(command -v curl 2>/dev/null || printf unavailable)"
+  printf 'git=%s\n' "$(command -v git 2>/dev/null || printf unavailable)"
+  printf 'jq=%s\n' "$(command -v jq 2>/dev/null || printf unavailable)"
   printf 'controller_head=%s\n' "$(git rev-parse HEAD 2>/dev/null || printf unavailable)"
   printf 'recorded_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   if [[ "$mode" == fail ]]; then printf 'outcome=deliberate-failure\n'; else printf 'outcome=success\n'; fi

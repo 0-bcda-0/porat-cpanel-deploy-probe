@@ -1,6 +1,6 @@
 # Phase 2 cPanel UAPI capability probe status
 
-Last updated: 2026-09-14 UTC (after Run #6)
+Last updated: 2026-09-14 UTC (after Run #8)
 
 ## Purpose
 
@@ -64,15 +64,28 @@ The next cPanel response failed closed with `Provide the “type” parameter fo
 
 Official cPanel UAPI documentation for `VersionControl/create` marks `type` as required with the only supported value `git`. For cloning an existing repository it also defines `source_repository` as a JSON object containing `remote_name` and `url`. The probe had been sending the non-documented `clone_url` parameter instead.
 
+### Run #7 — controller repository and cPanel deployment execution proven
+
+Run `34832738021`, SHA `51da7cfbccbb660e8720dbce4b6f4a96918d72d0`.
+
+The corrected `VersionControl/create` contract (`type=git` plus documented `source_repository`) succeeded. The isolated controller repository was registered under the approved probe root and `VersionControlDeployment/create` returned a deployment identifier. The run stopped only because the probe poller expected a generic `state`/`status` field that cp077 does not expose for these deployment records.
+
+### Run #8 — live cp077 deployment status model identified
+
+Run `34835125243`, SHA `4bcd00b9f37964ed58e709d084b4cc290582e330`.
+
+All local safety tests passed. The diagnostic artifact proved that `VersionControlDeployment/retrieve` returns an array of records containing `deploy_id`, `task_id`, and a `timestamps` object. The newly created deployment correlated exactly by `deploy_id`, and its timestamps contained `queued`, `active`, and `succeeded`. This proves that the cPanel deployment executed successfully; the remaining blocker is solely the probe poller interpreting the wrong status model.
+
+
 ## Current root-cause hypothesis
 
-The flattened-response compatibility issue is resolved for the tested call. The immediate blocker is now a request-contract mismatch in `VersionControl/create`: the probe omitted required `type=git` and used `clone_url` instead of the documented `source_repository` JSON object.
+The transport, token authentication, flattened UAPI parsing, isolated cPanel Git repository registration, deployment creation, deployment retrieval, and successful controller execution are proven. The immediate blocker is local probe logic: cp077 represents deployment lifecycle through `timestamps.queued`, `timestamps.active`, `timestamps.succeeded`, and `timestamps.failed`, while the current poller still expects generic `state`/`status` fields.
 
-## Next change / Run #7
+## Next change / Run #9
 
-Run #7 changes only the isolated controller-repository creation request. It adds `type=git`, constructs `source_repository` with `jq -cn` from the already allowlisted public clone URL using remote name `origin`, and removes the obsolete `clone_url` request parameter.
+Run #9 is the consolidation run. The poller accepts correlation by `deploy_id`, `task_id`, or legacy `id`, derives state from the observed cPanel timestamp model with fail-first precedence, tolerates a bounded initial visibility delay, and retains the legacy state/status fallback for test compatibility. The same run then continues through the already-written isolated Fileman upload/overwrite checks, success worker execution, deliberate non-zero failure propagation, request/result correlation, and unchanged-controller-HEAD retrigger check. A machine-readable `capabilities.json` is emitted only if the full probe reaches the end successfully.
 
-Regression checks require all three pieces of the documented request contract before a live run: `type=git`, `source_repository`, and `remote_name=origin`. If repository creation succeeds, the probe may continue only within the already-approved isolated Phase 2 root. Any new failure remains the next evidence point; scope must not broaden to Porat Staff live roots, production, databases, weather, or SSH/SCP replacement.
+No Porat Staff DEV/PROD application roots, database, weather ingestion, SSH/SCP path, or deferred SamBoat/Google Calendar work are part of Run #9.
 
 ## Adoption gates still outstanding
 

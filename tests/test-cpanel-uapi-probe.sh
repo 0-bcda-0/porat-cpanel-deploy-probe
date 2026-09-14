@@ -124,15 +124,41 @@ MOCK
 chmod +x "$test_root/bin/curl"
 
 run_poll() {
-  local response_dir="$1" attempts="$2"
+  local response_dir="$1" attempts="$2" deploy_id="${3:-41}"
   printf '0\n' >"$test_root/counter"
   env CPANEL_API_BASE_URL=https://cp077.mydataknox.com:2083 \
     CPANEL_USER=echosline CPANEL_API_TOKEN=dummy CPANEL_CURL_BIN="$test_root/bin/curl" \
     CPANEL_POLL_INTERVAL_SECONDS=0 CPANEL_POLL_MAX_ATTEMPTS="$attempts" \
     MOCK_RESPONSE_DIR="$response_dir" MOCK_COUNTER="$test_root/counter" \
     MOCK_HTTP_CODE=200 MOCK_CONTENT_TYPE=application/json \
-    "$probe" poll-deployment 41
+    "$probe" poll-deployment "$deploy_id"
 }
+
+mkdir -p "$test_root/timestamp-success"
+printf '%s\n' '{"result":{"status":1,"data":[{"deploy_id":41,"task_id":"00000000/live-success","timestamps":{"queued":"1","active":"2","succeeded":"3"}}],"errors":null}}' >"$test_root/timestamp-success/0.json"
+run_poll "$test_root/timestamp-success" 1 >"$test_root/timestamp-success.out" 2>&1 || fail 'timestamp-based succeeded deployment was not accepted'
+grep -Fq 'Deployment task 41 succeeded with status succeeded' "$test_root/timestamp-success.out" || fail 'timestamp-based success state was not reported'
+pass 'cPanel timestamp-based deployment success parsing'
+
+mkdir -p "$test_root/timestamp-failure"
+printf '%s\n' '{"result":{"status":1,"data":[{"deploy_id":41,"task_id":"00000000/live-failure","timestamps":{"queued":"1","active":"2","failed":"3"}}],"errors":null}}' >"$test_root/timestamp-failure/0.json"
+set +e; run_poll "$test_root/timestamp-failure" 1 >"$test_root/timestamp-failure.out" 2>&1; status=$?; set -e
+[[ $status -eq 1 ]] || fail 'timestamp-based failed deployment was not propagated as failure'
+grep -Fq 'Deployment task 41 failed with status failed' "$test_root/timestamp-failure.out" || fail 'timestamp-based failure state was not reported'
+pass 'cPanel timestamp-based deployment failure propagation'
+
+mkdir -p "$test_root/task-id-success"
+printf '%s\n' '{"result":{"status":1,"data":[{"deploy_id":41,"task_id":"00000000/task-current","timestamps":{"queued":"1","succeeded":"2"}}],"errors":null}}' >"$test_root/task-id-success/0.json"
+run_poll "$test_root/task-id-success" 1 '00000000/task-current' >"$test_root/task-id-success.out" 2>&1 || fail 'task_id correlation was not accepted'
+grep -Fq 'Deployment task 00000000/task-current succeeded with status succeeded' "$test_root/task-id-success.out" || fail 'task_id success state was not reported'
+pass 'deployment correlation accepts cPanel task_id'
+
+mkdir -p "$test_root/visibility-lag"
+printf '%s\n' '{"result":{"status":1,"data":[],"errors":null}}' >"$test_root/visibility-lag/0.json"
+printf '%s\n' '{"result":{"status":1,"data":[{"deploy_id":41,"task_id":"00000000/visible-later","timestamps":{"queued":"1","succeeded":"2"}}],"errors":null}}' >"$test_root/visibility-lag/1.json"
+run_poll "$test_root/visibility-lag" 2 >"$test_root/visibility-lag.out" 2>&1 || fail 'brief deployment visibility lag was treated as terminal failure'
+[[ "$(cat "$test_root/counter")" -eq 2 ]] || fail 'visibility-lag test did not perform the bounded retry'
+pass 'bounded deployment visibility lag retry'
 
 mkdir -p "$test_root/unexpected"
 printf '%s\n' '{"result":{"status":1,"data":[{"id":"41","state":"mystery"}],"errors":null}}' >"$test_root/unexpected/0.json"

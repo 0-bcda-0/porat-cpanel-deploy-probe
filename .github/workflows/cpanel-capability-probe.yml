@@ -1,0 +1,42 @@
+name: cPanel capability probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cpanel-capability-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    environment: development
+    timeout-minutes: 20
+    env:
+      CPANEL_API_BASE_URL: ${{ vars.CPANEL_API_BASE_URL }}
+      CPANEL_USER: ${{ vars.CPANEL_USER }}
+      CPANEL_API_TOKEN: ${{ secrets.CPANEL_API_TOKEN }}
+      CPANEL_CONTROLLER_CLONE_URL: https://github.com/0-bcda-0/porat-cpanel-deploy-probe.git
+    steps:
+      - name: Check out immutable controller HEAD
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Run local safety tests
+        run: |
+          tests/test-cpanel-uapi-probe.sh
+          tests/test-repository-contract.sh
+
+      - name: Run isolated live capability probe
+        run: scripts/cpanel-uapi-probe.sh run-live-probe
+
+      - name: Retain non-secret observations
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cpanel-capability-probe-results
+          path: probe-results/
+          if-no-files-found: warn
+          retention-days: 7

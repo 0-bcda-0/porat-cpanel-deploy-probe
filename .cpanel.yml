@@ -1,0 +1,4 @@
+---
+deployment:
+  tasks:
+    - /bin/bash ./probe-worker.sh

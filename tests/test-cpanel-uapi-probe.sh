@@ -78,13 +78,40 @@ grep -Fq 'Polling timed out; deployment was not retriggered' "$test_root/timeout
 [[ "$(cat "$test_root/counter")" -eq 2 ]] || fail 'poller exceeded its attempt bound'
 pass 'bounded polling timeout without retrigger'
 
-set +e
-CPANEL_API_BASE_URL=https://cp077.mydataknox.com:2083 CPANEL_USER=echosline CPANEL_API_TOKEN=dummy \
-  "$probe" run-live-probe >"$test_root/live-config.out" 2>&1
-status=$?
-set -e
-[[ $status -eq 64 ]] || fail 'live probe accepted missing controller clone URL'
-grep -Fq 'Controller clone URL is not approved' "$test_root/live-config.out" || fail 'live probe clone URL failure was unclear'
-pass 'exact public controller clone URL allowlist'
+cat >"$test_root/bin/no-network" <<'MOCK'
+#!/usr/bin/env bash
+printf 'network sentinel invoked\n' >&2
+exit 99
+MOCK
+chmod +x "$test_root/bin/no-network"
+
+assert_clone_url_rejected() {
+  local label="$1" value="${2-__unset__}" output status
+  output="$test_root/clone-$label.out"
+  set +e
+  if [[ "$value" == __unset__ ]]; then
+    env -u CPANEL_CONTROLLER_CLONE_URL \
+      CPANEL_API_BASE_URL=https://cp077.mydataknox.com:2083 CPANEL_USER=echosline CPANEL_API_TOKEN=dummy \
+      CPANEL_CURL_BIN="$test_root/bin/no-network" "$probe" run-live-probe >"$output" 2>&1
+  else
+    CPANEL_API_BASE_URL=https://cp077.mydataknox.com:2083 CPANEL_USER=echosline CPANEL_API_TOKEN=dummy \
+      CPANEL_CURL_BIN="$test_root/bin/no-network" CPANEL_CONTROLLER_CLONE_URL="$value" \
+      "$probe" run-live-probe >"$output" 2>&1
+  fi
+  status=$?
+  set -e
+  [[ $status -eq 64 ]] || fail "live probe accepted $label controller clone URL"
+  grep -Fq 'Controller clone URL is not approved' "$output" || fail "$label clone URL failure was unclear"
+  ! grep -Fq 'network sentinel invoked' "$output" || fail "$label clone URL reached the network layer"
+}
+
+assert_clone_url_rejected missing
+assert_clone_url_rejected empty ''
+assert_clone_url_rejected malformed 'not-a-url'
+assert_clone_url_rejected alternate 'https://github.com/0-bcda-0/another-repository.git'
+assert_clone_url_rejected ssh-form 'git@github.com:0-bcda-0/porat-cpanel-deploy-probe.git'
+assert_clone_url_rejected credential-bearing 'https://user:token@github.com/0-bcda-0/porat-cpanel-deploy-probe.git'
+assert_clone_url_rejected arbitrary 'https://example.com/controller.git'
+pass 'exact public controller clone URL allowlist before network access'
 
 echo 'All cPanel UAPI probe tests passed.'

@@ -37,6 +37,27 @@ validate_config() {
   fi
 }
 
+summarize_response_file() {
+  local response_file="$1"
+  if ! jq -e . "$response_file" >/dev/null 2>&1; then
+    safe_error 'Malformed UAPI JSON response'
+    return 65
+  fi
+  jq -c '{
+    top_level_keys:(keys|sort),
+    apiversion:(if (.apiversion|type) == "number" or (.apiversion|type) == "string" then .apiversion else null end),
+    module_type:(.module|type),
+    func_type:(.func|type),
+    result_keys:(if (.result|type) == "object" then (.result|keys|sort) else [] end),
+    status:.result.status,
+    data_type:(.result.data|type),
+    errors_type:(.result.errors|type),
+    messages_type:(.result.messages|type),
+    warnings_type:(.result.warnings|type),
+    metadata_type:(.result.metadata|type)
+  }' "$response_file"
+}
+
 parse_response() {
   local response_file="$1" status data errors
   if ! jq -e . "$response_file" >/dev/null 2>&1; then
@@ -160,7 +181,7 @@ uapi_envelope_summary() {
     rm -f -- "$response_file" "$metadata_file"
     return "$request_status"
   fi
-  jq -c '{top_level_keys:(keys|sort),result_keys:(.result|keys|sort),status:.result.status,data_type:(.result.data|type),errors_type:(.result.errors|type)}' "$response_file"
+  summarize_response_file "$response_file"
   local status=$?
   rm -f -- "$response_file" "$metadata_file"
   return "$status"
@@ -287,8 +308,9 @@ run_live_probe() {
   temp_root="$(mktemp -d)"
   mkdir -p probe-results
 
-  uapi_get 'Variables/get_user_information' >/dev/null
   success_format="$(uapi_envelope_summary 'Variables/get_user_information')"
+  printf '%s\n' "$success_format" >probe-results/first-uapi-envelope.json
+  uapi_get 'Variables/get_user_information' >/dev/null
   ensure_controller_repository "$clone_url"
 
   bootstrap_id="$(create_deployment)"
@@ -346,7 +368,7 @@ run_live_probe() {
 }
 
 usage() {
-  printf 'Usage: %s {validate-config|parse-response FILE|poll-deployment TASK_ID|run-live-probe}\n' "$0" >&2
+  printf 'Usage: %s {validate-config|parse-response FILE|summarize-response FILE|poll-deployment TASK_ID|run-live-probe}\n' "$0" >&2
   exit 64
 }
 
@@ -357,6 +379,10 @@ case "${1:-}" in
   parse-response)
     [[ $# -eq 2 ]] || usage
     parse_response "$2"
+    ;;
+  summarize-response)
+    [[ $# -eq 2 ]] || usage
+    summarize_response_file "$2"
     ;;
   poll-deployment)
     [[ $# -eq 2 ]] || usage

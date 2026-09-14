@@ -44,6 +44,22 @@ grep -Fq 'UAPI request failed' "$test_root/failure.out" || fail 'UAPI failure wa
 ! grep -Fq "$secret" "$test_root/failure.out" || fail 'secret appeared in UAPI error output'
 pass 'UAPI failure parsing and secret-safe errors'
 
+sensitive_value='private-user-value-must-not-leak'
+printf '%s\n' "{\"apiversion\":3,\"module\":\"Variables\",\"func\":\"get_user_information\",\"result\":{\"status\":0,\"data\":{\"home\":\"$sensitive_value\"},\"errors\":null,\"messages\":[],\"warnings\":null,\"metadata\":{\"reason\":\"$sensitive_value\"}}}" >"$test_root/diagnostic.json"
+set +e
+CPANEL_API_TOKEN="$secret" "$probe" summarize-response "$test_root/diagnostic.json" >"$test_root/diagnostic.out" 2>&1
+status=$?
+set -e
+[[ $status -eq 0 ]] || fail 'safe UAPI envelope summary command failed'
+grep -Fq '"status":0' "$test_root/diagnostic.out" || fail 'safe UAPI envelope summary omitted status'
+grep -Fq '"data_type":"object"' "$test_root/diagnostic.out" || fail 'safe UAPI envelope summary omitted data type'
+grep -Fq '"errors_type":"null"' "$test_root/diagnostic.out" || fail 'safe UAPI envelope summary omitted errors type'
+grep -Fq '"messages_type":"array"' "$test_root/diagnostic.out" || fail 'safe UAPI envelope summary omitted messages type'
+grep -Fq '"warnings_type":"null"' "$test_root/diagnostic.out" || fail 'safe UAPI envelope summary omitted warnings type'
+grep -Fq '"metadata_type":"object"' "$test_root/diagnostic.out" || fail 'safe UAPI envelope summary omitted metadata type'
+! grep -Fq "$sensitive_value" "$test_root/diagnostic.out" || fail 'safe UAPI envelope summary leaked response values'
+pass 'safe UAPI failure envelope structure summary'
+
 mkdir -p "$test_root/bin"
 cat >"$test_root/bin/curl" <<'MOCK'
 #!/usr/bin/env bash
@@ -197,7 +213,7 @@ CPANEL_API_BASE_URL=https://cp077.mydataknox.com:2083 CPANEL_USER=echosline CPAN
 status=$?
 set -e
 [[ $status -ne 0 ]] || fail 'failed first HTTPS request was accepted'
-grep -Fq 'HTTPS UAPI request failed' "$test_root/first-request-failure.out" || fail 'first HTTPS failure was not reported'
+grep -Fq 'HTTPS UAPI structure probe request failed' "$test_root/first-request-failure.out" || fail 'first HTTPS failure was not reported'
 ! grep -Fq 'unbound variable' "$test_root/first-request-failure.out" || fail 'cleanup produced a secondary unbound-variable error'
 pass 'clean exit after failed first HTTPS request'
 

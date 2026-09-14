@@ -37,20 +37,22 @@ run_worker(){
 
 sha='0123456789abcdef0123456789abcdef01234567'
 sum='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-printf 'archive' >"$app/uploads/$sha.tar.gz"
+archive_name="$sha-test-1.tar.gz"
+printf 'archive' >"$app/uploads/$archive_name"
 cat >"$probe/inbox/current.request" <<REQ
 request_id=test-1
 operation=deploy-development
 sha=$sha
 checksum=$sum
+archive_name=$archive_name
 REQ
 run_worker || fail 'valid DEV request failed'
-grep -Fxq "deploy $sha $app/uploads/$sha.tar.gz $sum" "$tmp/capture" || fail 'deployer arguments incorrect'
+grep -Fxq "deploy $sha $app/uploads/$archive_name $sum" "$tmp/capture" || fail 'deployer arguments incorrect'
 grep -Fxq "$tmp/public" "$tmp/capture" || fail 'public root not derived'
 grep -Fxq 'https://bcda.com.hr' "$tmp/capture" || fail 'base URL not derived'
 grep -Fxq 'porat_staff_dev_session' "$tmp/capture" || fail 'cookie not derived'
 grep -Fxq 'outcome=success' "$probe/results/test-1.result" || fail 'success result missing'
-[[ ! -e "$app/uploads/$sha.tar.gz" ]] || fail 'archive not cleaned'
+[[ ! -e "$app/uploads/$archive_name" ]] || fail 'archive not cleaned'
 pass 'valid development deployment request'
 
 cat >"$probe/inbox/current.request" <<REQ
@@ -85,12 +87,14 @@ set +e; run_worker >"$tmp/out" 2>&1; st=$?; set -e
 [[ $st -eq 64 ]] || fail 'arbitrary request field was not rejected'
 pass 'arbitrary path field rejected'
 
-printf 'archive' >"$app/uploads/$sha.tar.gz"
+archive_name="$sha-test-5.tar.gz"
+printf 'archive' >"$app/uploads/$archive_name"
 cat >"$probe/inbox/current.request" <<REQ
 request_id=test-5
 operation=deploy-development
 sha=$sha
 checksum=$sum
+archive_name=$archive_name
 REQ
 MOCK_EXIT=42
 set +e; run_worker >"$tmp/out" 2>&1; st=$?; set -e
@@ -98,5 +102,17 @@ set +e; run_worker >"$tmp/out" 2>&1; st=$?; set -e
 grep -Fxq 'outcome=failure' "$probe/results/test-5.result" || fail 'failure result missing'
 grep -Fxq 'exit_status=42' "$probe/results/test-5.result" || fail 'failure exit status missing'
 pass 'deployer failure propagated'
+
+cat >"$probe/inbox/current.request" <<REQ
+request_id=test-6
+operation=deploy-development
+sha=$sha
+checksum=$sum
+archive_name=../../outside.tar.gz
+REQ
+set +e; run_worker >"$tmp/out" 2>&1; st=$?; set -e
+[[ $st -eq 64 ]] || fail 'arbitrary archive name was not rejected'
+grep -Fq 'Invalid deployment archive name' "$tmp/out" || fail 'archive-name rejection reason missing'
+pass 'arbitrary archive name rejected'
 
 echo 'All controller tests passed.'

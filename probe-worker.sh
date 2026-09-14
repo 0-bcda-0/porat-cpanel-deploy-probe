@@ -25,6 +25,7 @@ operation=''
 mode=''
 sha=''
 checksum=''
+archive_name=''
 
 if [[ ! -f "$request_file" ]]; then
   printf 'Missing request file\n' >&2
@@ -38,6 +39,7 @@ while IFS='=' read -r key value; do
     mode) mode="$value" ;;
     sha) sha="$value" ;;
     checksum) checksum="$value" ;;
+    archive_name) archive_name="$value" ;;
     '') ;;
     *) printf 'Unrecognized request field\n' >&2; exit 64 ;;
   esac
@@ -66,8 +68,10 @@ if [[ "$operation" == 'deploy-development' ]]; then
   [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { printf 'Invalid deployment SHA\n' >&2; exit 64; }
   [[ "$checksum" =~ ^[0-9a-f]{64}$ ]] || { printf 'Invalid deployment checksum\n' >&2; exit 64; }
   [[ -z "$mode" ]] || { printf 'Mode is not valid for deployment requests\n' >&2; exit 64; }
+  expected_archive_name="${sha}-${request_id}.tar.gz"
+  [[ "$archive_name" == "$expected_archive_name" ]] || { printf 'Invalid deployment archive name\n' >&2; exit 64; }
 
-  archive="$dev_app_root/uploads/$sha.tar.gz"
+  archive="$dev_app_root/uploads/$archive_name"
   deployer="$dev_app_root/bin/deploy-release.sh"
 
   [[ -d "$dev_app_root" && ! -L "$dev_app_root" ]] || { printf 'Approved DEV app root is unavailable\n' >&2; exit 70; }

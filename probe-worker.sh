@@ -32,7 +32,7 @@ if [[ ! -f "$request_file" ]]; then
   exit 64
 fi
 
-while IFS='=' read -r key value; do
+while IFS='=' read -r key value || [[ -n "$key" || -n "$value" ]]; do
   case "$key" in
     request_id) request_id="$value" ;;
     operation) operation="$value" ;;

@@ -115,4 +115,13 @@ set +e; run_worker >"$tmp/out" 2>&1; st=$?; set -e
 grep -Fq 'Invalid deployment archive name' "$tmp/out" || fail 'archive-name rejection reason missing'
 pass 'arbitrary archive name rejected'
 
+archive_name="$sha-test-7.tar.gz"
+printf 'archive' >"$app/uploads/$archive_name"
+printf 'request_id=test-7\noperation=deploy-development\nsha=%s\nchecksum=%s\narchive_name=%s' "$sha" "$sum" "$archive_name" >"$probe/inbox/current.request"
+MOCK_EXIT=0
+run_worker || fail 'unterminated final request line was not processed'
+grep -Fxq "deploy $sha $app/uploads/$archive_name $sum" "$tmp/capture" || fail 'unterminated final line did not reach deployer'
+grep -Fxq 'outcome=success' "$probe/results/test-7.result" || fail 'unterminated final-line success result missing'
+pass 'unterminated final request line processed'
+
 echo 'All controller tests passed.'

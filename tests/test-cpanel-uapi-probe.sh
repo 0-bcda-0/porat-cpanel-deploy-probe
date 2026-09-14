@@ -68,6 +68,21 @@ grep -Fq '"metadata_type":"object"' "$test_root/diagnostic.out" || fail 'safe UA
 ! grep -Fq "$sensitive_value" "$test_root/diagnostic.out" || fail 'safe UAPI envelope summary leaked response values'
 pass 'safe UAPI failure envelope structure summary'
 
+retrieve_sensitive='private-author-and-message-must-not-leak'
+cat >"$test_root/deployment-retrieve.json" <<JSON
+[{"deploy_id":7,"task_id":"task/old","repository_root":"/private/old","timestamps":{"queued":"1","succeeded":"2"},"repository_state":{"author":"$retrieve_sensitive"}},{"deploy_id":13,"task_id":"task/current","repository_root":"/private/current","timestamps":{"queued":"3","active":"4"},"repository_state":{"message":"$retrieve_sensitive"}}]
+JSON
+deployment_summary="$(CPANEL_API_TOKEN=dummy "$probe" summarize-deployment-retrieve "$test_root/deployment-retrieve.json" 13)"
+grep -Fq '"data_type":"array"' <<<"$deployment_summary" || fail 'deployment retrieve summary omitted data type'
+grep -Fq '"count":2' <<<"$deployment_summary" || fail 'deployment retrieve summary omitted item count'
+grep -Fq '"deploy_id":13' <<<"$deployment_summary" || fail 'deployment retrieve summary omitted deploy identifier'
+grep -Fq '"task_id":"task/current"' <<<"$deployment_summary" || fail 'deployment retrieve summary omitted task identifier'
+grep -Fq '"matching_indices":[1]' <<<"$deployment_summary" || fail 'deployment retrieve summary did not correlate the requested identifier'
+grep -Fq '"timestamp_key_sets"' <<<"$deployment_summary" || fail 'deployment retrieve summary omitted timestamp key sets'
+! grep -Fq "$retrieve_sensitive" <<<"$deployment_summary" || fail 'deployment retrieve summary leaked repository state values'
+! grep -Fq '/private/' <<<"$deployment_summary" || fail 'deployment retrieve summary leaked repository roots'
+pass 'safe deployment retrieve shape and identifier summary'
+
 mkdir -p "$test_root/bin"
 cat >"$test_root/bin/curl" <<'MOCK'
 #!/usr/bin/env bash
@@ -219,6 +234,8 @@ grep -Fq -- 'source_repository="$(jq -cn --arg url "$clone_url"' "$probe" || fai
 grep -Fq -- '{remote_name:"origin",url:$url}' "$probe" || fail 'source_repository JSON does not pin origin as the remote name'
 ! grep -Fq -- '--data-urlencode "clone_url=$clone_url"' "$probe" || fail 'obsolete clone_url parameter is still used for VersionControl create'
 pass 'VersionControl create uses required git repository parameters'
+grep -Fq -- '.source_repository.url' "$probe" || fail 'existing repository validation does not read source_repository.url'
+pass 'existing repository validation reads the documented source URL field'
 
 set +e
 CPANEL_API_BASE_URL=https://cp077.mydataknox.com:2083 CPANEL_USER=echosline CPANEL_API_TOKEN=dummy \

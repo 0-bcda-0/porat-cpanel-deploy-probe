@@ -239,6 +239,29 @@ poll_deployment() {
   return 75
 }
 
+summarize_deployment_retrieve_data() {
+  local data_json="$1" wanted="$2"
+  jq -c --arg wanted "$wanted" '
+    if type != "array" then
+      {data_type:type,count:null,item_key_sets:[],identifiers:[],matching_indices:[],timestamp_key_sets:[]}
+    else
+      {
+        data_type:type,
+        count:length,
+        item_key_sets:([.[] | if type == "object" then (keys|sort) else [type] end] | unique),
+        identifiers:([.[] | if type == "object" then {deploy_id:(.deploy_id // null),task_id:(.task_id // null)} else {deploy_id:null,task_id:null} end]),
+        matching_indices:([range(0; length) as $i | .[$i]
+          | select(type == "object" and (
+              (((.deploy_id // "") | tostring) == $wanted) or
+              (((.task_id // "") | tostring) == $wanted)
+            ))
+          | $i]),
+        timestamp_key_sets:([.[] | if (.timestamps|type) == "object" then (.timestamps|keys|sort) else [] end] | unique)
+      }
+    end
+  ' <<<"$data_json"
+}
+
 create_deployment() {
   local data deploy_id
   data="$(uapi_get 'VersionControlDeployment/create' --data-urlencode "repository_root=$controller_root")"
@@ -270,7 +293,7 @@ ensure_controller_repository() {
       ;;
     1)
       local registered_url
-      registered_url="$(jq -r --arg root "$controller_root" '.[] | select(.repository_root == $root) | (.clone_url // .source_repository // .url // empty)' <<<"$repositories")"
+      registered_url="$(jq -r --arg root "$controller_root" '.[] | select(.repository_root == $root) | (.clone_url // .source_repository.url // .url // empty)' <<<"$repositories")"
       if [[ -n "$registered_url" && "$registered_url" != "$clone_url" ]]; then
         safe_error 'Existing probe repository has an unexpected clone URL'
         return 65
@@ -313,7 +336,7 @@ run_one_probe() {
 }
 
 run_live_probe() {
-  local clone_url="${CPANEL_CONTROLLER_CLONE_URL:-}" fixture request_file
+  local clone_url="${CPANEL_CONTROLLER_CLONE_URL:-}" fixture request_file bootstrap_retrieve
   local bootstrap_id first second deliberate first_head second_head info success_format failure_format
   validate_config
   [[ "$clone_url" == "$approved_controller_clone_url" ]] || {
@@ -329,6 +352,8 @@ run_live_probe() {
   ensure_controller_repository "$clone_url"
 
   bootstrap_id="$(create_deployment)"
+  bootstrap_retrieve="$(uapi_get 'VersionControlDeployment/retrieve')"
+  summarize_deployment_retrieve_data "$bootstrap_retrieve" "$bootstrap_id" >probe-results/bootstrap-deployment-retrieve.json
   poll_deployment "$bootstrap_id" >"$temp_root/bootstrap.status"
 
   fixture="$temp_root/upload-fixture.txt"
@@ -383,7 +408,7 @@ run_live_probe() {
 }
 
 usage() {
-  printf 'Usage: %s {validate-config|parse-response FILE|summarize-response FILE|poll-deployment TASK_ID|run-live-probe}\n' "$0" >&2
+  printf 'Usage: %s {validate-config|parse-response FILE|summarize-response FILE|summarize-deployment-retrieve FILE ID|poll-deployment TASK_ID|run-live-probe}\n' "$0" >&2
   exit 64
 }
 
@@ -398,6 +423,11 @@ case "${1:-}" in
   summarize-response)
     [[ $# -eq 2 ]] || usage
     summarize_response_file "$2"
+    ;;
+  summarize-deployment-retrieve)
+    [[ $# -eq 3 ]] || usage
+    [[ -f "$2" ]] || { safe_error 'Deployment retrieve fixture file is required'; exit 64; }
+    summarize_deployment_retrieve_data "$(cat "$2")" "$3"
     ;;
   poll-deployment)
     [[ $# -eq 2 ]] || usage

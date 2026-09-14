@@ -7,6 +7,12 @@ readonly approved_cpanel_user='echosline'
 readonly approved_controller_clone_url='https://github.com/0-bcda-0/porat-cpanel-deploy-probe.git'
 readonly probe_root='/home/echosline/cpanel-deploy-probe'
 readonly controller_root="$probe_root/controller"
+temp_root=''
+
+cleanup() {
+  [[ -z "${temp_root:-}" ]] || rm -rf -- "$temp_root"
+}
+trap cleanup EXIT
 
 safe_error() {
   local message="$1" token="${CPANEL_API_TOKEN:-}"
@@ -216,7 +222,7 @@ run_one_probe() {
 }
 
 run_live_probe() {
-  local clone_url="${CPANEL_CONTROLLER_CLONE_URL:-}" temp_root fixture request_file
+  local clone_url="${CPANEL_CONTROLLER_CLONE_URL:-}" fixture request_file
   local bootstrap_id first second deliberate first_head second_head info success_format failure_format
   validate_config
   [[ "$clone_url" == "$approved_controller_clone_url" ]] || {
@@ -224,7 +230,6 @@ run_live_probe() {
     return 64
   }
   temp_root="$(mktemp -d)"
-  trap 'rm -rf -- "$temp_root"' EXIT
   mkdir -p probe-results
 
   uapi_get 'Variables/get_user_information' >/dev/null

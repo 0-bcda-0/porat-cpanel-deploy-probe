@@ -9,6 +9,9 @@ trap 'rm -rf -- "$test_root"' EXIT
 fail() { printf 'FAIL  %s\n' "$1" >&2; exit 1; }
 pass() { printf 'PASS  %s\n' "$1"; }
 
+grep -Fq "temp_root=''" "$probe" || fail 'cleanup root is not initialized before the EXIT trap'
+grep -Fq '[[ -z "${temp_root:-}" ]]' "$probe" || fail 'cleanup trap is not safe for an unset/empty root'
+
 set +e
 CPANEL_API_BASE_URL=https://example.com:2083 CPANEL_USER=echosline CPANEL_API_TOKEN=dummy "$probe" validate-config >"$test_root/origin.out" 2>&1
 status=$?
@@ -113,5 +116,17 @@ assert_clone_url_rejected ssh-form 'git@github.com:0-bcda-0/porat-cpanel-deploy-
 assert_clone_url_rejected credential-bearing 'https://user:token@github.com/0-bcda-0/porat-cpanel-deploy-probe.git'
 assert_clone_url_rejected arbitrary 'https://example.com/controller.git'
 pass 'exact public controller clone URL allowlist before network access'
+
+set +e
+CPANEL_API_BASE_URL=https://cp077.mydataknox.com:2083 CPANEL_USER=echosline CPANEL_API_TOKEN=dummy \
+  CPANEL_CURL_BIN="$test_root/bin/no-network" \
+  CPANEL_CONTROLLER_CLONE_URL=https://github.com/0-bcda-0/porat-cpanel-deploy-probe.git \
+  "$probe" run-live-probe >"$test_root/first-request-failure.out" 2>&1
+status=$?
+set -e
+[[ $status -ne 0 ]] || fail 'failed first HTTPS request was accepted'
+grep -Fq 'HTTPS UAPI request failed' "$test_root/first-request-failure.out" || fail 'first HTTPS failure was not reported'
+! grep -Fq 'unbound variable' "$test_root/first-request-failure.out" || fail 'cleanup produced a secondary unbound-variable error'
+pass 'clean exit after failed first HTTPS request'
 
 echo 'All cPanel UAPI probe tests passed.'

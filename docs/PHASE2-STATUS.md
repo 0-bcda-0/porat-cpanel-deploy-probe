@@ -1,6 +1,6 @@
 # Phase 2 cPanel UAPI capability probe status
 
-Last updated: 2026-09-14 UTC (after Run #5)
+Last updated: 2026-09-14 UTC (after Run #6)
 
 ## Purpose
 
@@ -54,15 +54,25 @@ This is the key evidence from Run #5. Official cPanel UAPI documentation normall
 
 No sensitive response values were captured; only key names and value types were retained.
 
+### Run #6 — dual-envelope parser works; repository creation reached cPanel validation
+
+Run `34831946621`, SHA `0d3c648f59d3f80f35b9279a268521f6acb0e2f4`.
+
+All local safety tests passed, including the flattened-envelope regression. The live probe successfully passed the initial `Variables/get_user_information` call under the dual-envelope parser and continued to `VersionControl/retrieve` / controller repository setup for the first time.
+
+The next cPanel response failed closed with `Provide the “type” parameter for the “Cpanel::VersionControl::new” function.` No Fileman upload, VersionControlDeployment task, Porat Staff application deployment, database change, weather change, or SSH/SCP replacement occurred.
+
+Official cPanel UAPI documentation for `VersionControl/create` marks `type` as required with the only supported value `git`. For cloning an existing repository it also defines `source_repository` as a JSON object containing `remote_name` and `url`. The probe had been sending the non-documented `clone_url` parameter instead.
+
 ## Current root-cause hypothesis
 
-The immediate blocker is a response-envelope compatibility mismatch in the probe client, not basic TLS, HTTP transport, or the earlier wrong-account token. The live cp077 endpoint returns the UAPI result payload flattened at the top level for the tested call. The probe must accept both the canonical nested cPanel form and this observed flattened form while continuing to fail closed on unknown shapes.
+The flattened-response compatibility issue is resolved for the tested call. The immediate blocker is now a request-contract mismatch in `VersionControl/create`: the probe omitted required `type=git` and used `clone_url` instead of the documented `source_repository` JSON object.
 
-## Next change / Run #6
+## Next change / Run #7
 
-Run #6 adds dual-envelope parsing. A response is accepted only when it is either the canonical object with a `result` object or the observed flattened object containing `status` plus `data` or `errors`. Unknown JSON shapes remain rejected. The safe summarizer also records `envelope_shape` as `nested-result`, `flat-result`, or `unknown` without exposing response values.
+Run #7 changes only the isolated controller-repository creation request. It adds `type=git`, constructs `source_repository` with `jq -cn` from the already allowlisted public clone URL using remote name `origin`, and removes the obsolete `clone_url` request parameter.
 
-Tests cover the new flattened success path before the implementation. If the first live UAPI call succeeds under this parser, the probe may continue into the already-approved isolated Phase 2 capability checks under `/home/echosline/cpanel-deploy-probe`. Any new failure is to be treated as the next evidence point; do not broaden scope to Porat Staff live roots, production, databases, weather, or SSH/SCP replacement.
+Regression checks require all three pieces of the documented request contract before a live run: `type=git`, `source_repository`, and `remote_name=origin`. If repository creation succeeds, the probe may continue only within the already-approved isolated Phase 2 root. Any new failure remains the next evidence point; scope must not broaden to Porat Staff live roots, production, databases, weather, or SSH/SCP replacement.
 
 ## Adoption gates still outstanding
 

@@ -252,7 +252,7 @@ create_deployment() {
 }
 
 ensure_controller_repository() {
-  local clone_url="$1" repositories matches
+  local clone_url="$1" repositories matches source_repository
   [[ "$clone_url" == "$approved_controller_clone_url" ]] || {
     safe_error 'Controller clone URL is not approved'
     return 64
@@ -261,10 +261,12 @@ ensure_controller_repository() {
   matches="$(jq -r --arg root "$controller_root" '[.[] | select(.repository_root == $root)] | length' <<<"$repositories")"
   case "$matches" in
     0)
+      source_repository="$(jq -cn --arg url "$clone_url" '{remote_name:"origin",url:$url}')"
       uapi_get 'VersionControl/create' \
+        --data-urlencode 'type=git' \
         --data-urlencode "repository_root=$controller_root" \
         --data-urlencode 'name=porat-cpanel-deploy-probe' \
-        --data-urlencode "clone_url=$clone_url" >/dev/null
+        --data-urlencode "source_repository=$source_repository" >/dev/null
       ;;
     1)
       local registered_url

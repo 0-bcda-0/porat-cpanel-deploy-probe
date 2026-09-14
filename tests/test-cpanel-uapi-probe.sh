@@ -213,6 +213,13 @@ assert_clone_url_rejected credential-bearing 'https://user:token@github.com/0-bc
 assert_clone_url_rejected arbitrary 'https://example.com/controller.git'
 pass 'exact public controller clone URL allowlist before network access'
 
+grep -Fq -- "--data-urlencode 'type=git'" "$probe" || fail 'VersionControl create omits required type=git parameter'
+grep -Fq -- '--data-urlencode "source_repository=$source_repository"' "$probe" || fail 'VersionControl create omits source_repository payload'
+grep -Fq -- 'source_repository="$(jq -cn --arg url "$clone_url"' "$probe" || fail 'source_repository JSON is not generated from the approved clone URL'
+grep -Fq -- '{remote_name:"origin",url:$url}' "$probe" || fail 'source_repository JSON does not pin origin as the remote name'
+! grep -Fq -- '--data-urlencode "clone_url=$clone_url"' "$probe" || fail 'obsolete clone_url parameter is still used for VersionControl create'
+pass 'VersionControl create uses required git repository parameters'
+
 set +e
 CPANEL_API_BASE_URL=https://cp077.mydataknox.com:2083 CPANEL_USER=echosline CPANEL_API_TOKEN=dummy \
   CPANEL_CURL_BIN="$test_root/bin/no-network" \

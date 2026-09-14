@@ -2,53 +2,107 @@
 set -u -o pipefail
 umask 077
 
-readonly probe_root='/home/echosline/cpanel-deploy-probe'
-readonly inbox="$probe_root/inbox"
-readonly results="$probe_root/results"
-readonly request_file="$inbox/current.request"
+readonly default_probe_root='/home/echosline/cpanel-deploy-probe'
+readonly default_dev_app_root='/home/echosline/apps/porat-staff-v2'
+readonly default_dev_public_root='/home/echosline/bcda.com.hr'
+readonly default_dev_base_url='https://bcda.com.hr'
+readonly default_dev_cookie='porat_staff_dev_session'
+
+probe_root="${PORAT_CONTROLLER_PROBE_ROOT:-$default_probe_root}"
+dev_app_root="${PORAT_CONTROLLER_DEV_APP_ROOT:-$default_dev_app_root}"
+dev_public_root="${PORAT_CONTROLLER_DEV_PUBLIC_ROOT:-$default_dev_public_root}"
+dev_base_url="${PORAT_CONTROLLER_DEV_BASE_URL:-$default_dev_base_url}"
+dev_cookie="${PORAT_CONTROLLER_DEV_COOKIE:-$default_dev_cookie}"
+
+inbox="$probe_root/inbox"
+results="$probe_root/results"
+request_file="$inbox/current.request"
 
 mkdir -p "$inbox" "$results" || exit 70
 
-request_id='bootstrap'
-mode='success'
-if [[ -f "$request_file" ]]; then
-  while IFS='=' read -r key value; do
-    case "$key" in
-      request_id) request_id="$value" ;;
-      mode) mode="$value" ;;
-      *) printf 'Unrecognized request field\n' >&2; exit 64 ;;
-    esac
-  done <"$request_file"
+request_id=''
+operation=''
+mode=''
+sha=''
+checksum=''
+
+if [[ ! -f "$request_file" ]]; then
+  printf 'Missing request file\n' >&2
+  exit 64
 fi
 
+while IFS='=' read -r key value; do
+  case "$key" in
+    request_id) request_id="$value" ;;
+    operation) operation="$value" ;;
+    mode) mode="$value" ;;
+    sha) sha="$value" ;;
+    checksum) checksum="$value" ;;
+    '') ;;
+    *) printf 'Unrecognized request field\n' >&2; exit 64 ;;
+  esac
+done <"$request_file"
+
 [[ "$request_id" =~ ^[A-Za-z0-9-]{1,80}$ ]] || { printf 'Invalid request ID\n' >&2; exit 64; }
-[[ "$mode" == success || "$mode" == fail ]] || { printf 'Invalid probe mode\n' >&2; exit 64; }
 
-result_file="$results/$request_id.result"
-temporary="$results/.$request_id.result.$$"
-{
-  printf 'request_id=%s\n' "$request_id"
-  printf 'mode=%s\n' "$mode"
-  printf 'execution_user=%s\n' "$(id -un 2>/dev/null || printf unavailable)"
-  printf 'working_directory=%s\n' "$PWD"
-  printf 'path=%s\n' "$PATH"
-  printf 'bash=%s\n' "$(command -v bash 2>/dev/null || printf unavailable)"
-  printf 'tar=%s\n' "$(command -v tar 2>/dev/null || printf unavailable)"
-  printf 'sha256sum=%s\n' "$(command -v sha256sum 2>/dev/null || printf unavailable)"
-  printf 'realpath=%s\n' "$(command -v realpath 2>/dev/null || printf unavailable)"
-  printf 'php=%s\n' "$(command -v php 2>/dev/null || printf unavailable)"
-  printf 'curl=%s\n' "$(command -v curl 2>/dev/null || printf unavailable)"
-  printf 'git=%s\n' "$(command -v git 2>/dev/null || printf unavailable)"
-  printf 'jq=%s\n' "$(command -v jq 2>/dev/null || printf unavailable)"
-  printf 'controller_head=%s\n' "$(git rev-parse HEAD 2>/dev/null || printf unavailable)"
-  printf 'recorded_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  if [[ "$mode" == fail ]]; then printf 'outcome=deliberate-failure\n'; else printf 'outcome=success\n'; fi
-} >"$temporary" || exit 70
-chmod 600 "$temporary" || exit 70
-mv -f "$temporary" "$result_file" || exit 70
+write_result() {
+  local outcome="$1" status="$2"
+  local result_file="$results/$request_id.result"
+  local temporary="$results/.$request_id.result.$$"
+  {
+    printf 'request_id=%s\n' "$request_id"
+    printf 'operation=%s\n' "$operation"
+    [[ -n "$sha" ]] && printf 'sha=%s\n' "$sha"
+    printf 'outcome=%s\n' "$outcome"
+    printf 'exit_status=%s\n' "$status"
+    printf 'controller_head=%s\n' "$(git rev-parse HEAD 2>/dev/null || printf unavailable)"
+    printf 'recorded_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } >"$temporary" || exit 70
+  chmod 600 "$temporary" || exit 70
+  mv -f "$temporary" "$result_file" || exit 70
+}
 
-if [[ "$mode" == fail ]]; then
+if [[ "$operation" == 'deploy-development' ]]; then
+  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { printf 'Invalid deployment SHA\n' >&2; exit 64; }
+  [[ "$checksum" =~ ^[0-9a-f]{64}$ ]] || { printf 'Invalid deployment checksum\n' >&2; exit 64; }
+  [[ -z "$mode" ]] || { printf 'Mode is not valid for deployment requests\n' >&2; exit 64; }
+
+  archive="$dev_app_root/uploads/$sha.tar.gz"
+  deployer="$dev_app_root/bin/deploy-release.sh"
+
+  [[ -d "$dev_app_root" && ! -L "$dev_app_root" ]] || { printf 'Approved DEV app root is unavailable\n' >&2; exit 70; }
+  [[ -d "$dev_app_root/uploads" && ! -L "$dev_app_root/uploads" ]] || { printf 'Approved DEV uploads root is unavailable\n' >&2; exit 70; }
+  [[ -f "$archive" && ! -L "$archive" ]] || { printf 'Expected uploaded archive is unavailable\n' >&2; exit 70; }
+  [[ -f "$deployer" && ! -L "$deployer" ]] || { printf 'Stable DEV deployer is unavailable\n' >&2; exit 70; }
+
+  set +e
+  env \
+    PORAT_DEPLOY_APP_ROOT="$dev_app_root" \
+    PORAT_DEPLOY_PUBLIC_ROOT="$dev_public_root" \
+    PORAT_DEPLOY_BASE_URL="$dev_base_url" \
+    PORAT_DEPLOY_EXPECTED_SESSION_COOKIE="$dev_cookie" \
+    bash "$deployer" deploy "$sha" "$archive" "$checksum"
+  status=$?
+  set -e
+
+  rm -f -- "$archive"
+
+  if [[ $status -eq 0 ]]; then
+    write_result success 0
+    exit 0
+  fi
+
+  write_result failure "$status"
+  exit "$status"
+fi
+
+# Preserve the harmless capability-probe modes for the existing probe workflow.
+if [[ -z "$operation" && ( "$mode" == 'success' || "$mode" == 'fail' ) ]]; then
+  write_result "$([[ "$mode" == success ]] && printf success || printf deliberate-failure)" "$([[ "$mode" == success ]] && printf 0 || printf 42)"
+  [[ "$mode" == success ]] && exit 0
   printf 'Harmless deliberate failure for request %s\n' "$request_id" >&2
   exit 42
 fi
-printf 'Harmless probe completed for request %s\n' "$request_id"
+
+printf 'Invalid or unsupported operation\n' >&2
+exit 64

@@ -53,62 +53,117 @@ parse_response() {
   printf '%s\n' "$data"
 }
 
+http_metadata_summary() {
+  local response_file="$1" metadata_file="$2"
+  local http_code content_type redirect_url effective_url body_bytes body_sha
+  IFS=$'\t' read -r http_code content_type redirect_url effective_url <"$metadata_file" || true
+  [[ "$http_code" =~ ^[0-9]{3}$ ]] || {
+    safe_error 'Invalid HTTP metadata returned by curl'
+    return 65
+  }
+  body_bytes="$(wc -c <"$response_file" | tr -d '[:space:]')"
+  body_sha="$(sha256sum "$response_file" | awk '{print $1}')"
+
+  case "$http_code" in
+    2??)
+      if ! jq -e . "$response_file" >/dev/null 2>&1; then
+        safe_error "UAPI HTTP 2xx response was non-JSON: status=$http_code content_type=${content_type:-unknown} body_bytes=$body_bytes body_sha256=$body_sha"
+        return 65
+      fi
+      ;;
+    3??)
+      safe_error "UAPI HTTP redirect rejected: status=$http_code content_type=${content_type:-unknown} redirect=${redirect_url:-none} effective_url=${effective_url:-unknown}"
+      return 65
+      ;;
+    401|403)
+      safe_error "UAPI HTTP authentication/access failure: status=$http_code content_type=${content_type:-unknown}"
+      return 77
+      ;;
+    *)
+      safe_error "UAPI HTTP error: status=$http_code content_type=${content_type:-unknown} body_bytes=$body_bytes body_sha256=$body_sha"
+      return 1
+      ;;
+  esac
+}
+
+perform_http_request() {
+  local response_file="$1" metadata_file="$2" description="$3"
+  shift 3
+  local curl_bin="${CPANEL_CURL_BIN:-curl}"
+  if ! "$curl_bin" --silent --show-error \
+    --connect-timeout 10 --max-time 30 \
+    --header "Authorization: cpanel ${CPANEL_USER}:${CPANEL_API_TOKEN}" \
+    --output "$response_file" \
+    --write-out $'%{http_code}\t%{content_type}\t%{redirect_url}\t%{url_effective}' \
+    "$@" >"$metadata_file"; then
+    safe_error "HTTPS $description request failed"
+    return 1
+  fi
+  http_metadata_summary "$response_file" "$metadata_file"
+}
+
 uapi_get() {
-  local endpoint="$1" response_file curl_bin="${CPANEL_CURL_BIN:-curl}"
+  local endpoint="$1" response_file metadata_file
   shift
   validate_config
   response_file="$(mktemp)"
-  if ! "$curl_bin" --silent --show-error --fail-with-body \
-    --connect-timeout 10 --max-time 30 \
-    --header "Authorization: cpanel ${CPANEL_USER}:${CPANEL_API_TOKEN}" \
-    --get "${CPANEL_API_BASE_URL}/execute/${endpoint}" "$@" >"$response_file"; then
-    safe_error 'HTTPS UAPI request failed'
-    rm -f -- "$response_file"
-    return 1
+  metadata_file="$(mktemp)"
+  local request_status
+  if perform_http_request "$response_file" "$metadata_file" 'UAPI' \
+    --get "${CPANEL_API_BASE_URL}/execute/${endpoint}" "$@"; then
+    :
+  else
+    request_status=$?
+    rm -f -- "$response_file" "$metadata_file"
+    return "$request_status"
   fi
   parse_response "$response_file"
-  rm -f -- "$response_file"
+  local status=$?
+  rm -f -- "$response_file" "$metadata_file"
+  return "$status"
 }
 
 uapi_upload() {
-  local directory="$1" source="$2" filename="$3" response_file
-  local curl_bin="${CPANEL_CURL_BIN:-curl}"
+  local directory="$1" source="$2" filename="$3" response_file metadata_file
   validate_config
   response_file="$(mktemp)"
-  if ! "$curl_bin" --silent --show-error --fail-with-body \
-    --connect-timeout 10 --max-time 30 \
-    --header "Authorization: cpanel ${CPANEL_USER}:${CPANEL_API_TOKEN}" \
+  metadata_file="$(mktemp)"
+  local request_status
+  if perform_http_request "$response_file" "$metadata_file" 'Fileman upload' \
     --form-string "dir=$directory" \
     --form "file-1=@${source};filename=${filename}" \
-    "${CPANEL_API_BASE_URL}/execute/Fileman/upload_files" >"$response_file"; then
-    safe_error 'HTTPS Fileman upload failed'
-    rm -f -- "$response_file"
-    return 1
+    "${CPANEL_API_BASE_URL}/execute/Fileman/upload_files"; then
+    :
+  else
+    request_status=$?
+    rm -f -- "$response_file" "$metadata_file"
+    return "$request_status"
   fi
   parse_response "$response_file"
-  rm -f -- "$response_file"
+  local status=$?
+  rm -f -- "$response_file" "$metadata_file"
+  return "$status"
 }
 
 uapi_envelope_summary() {
-  local endpoint="$1" response_file curl_bin="${CPANEL_CURL_BIN:-curl}"
+  local endpoint="$1" response_file metadata_file
   shift
   validate_config
   response_file="$(mktemp)"
-  if ! "$curl_bin" --silent --show-error --fail-with-body \
-    --connect-timeout 10 --max-time 30 \
-    --header "Authorization: cpanel ${CPANEL_USER}:${CPANEL_API_TOKEN}" \
-    --get "${CPANEL_API_BASE_URL}/execute/${endpoint}" "$@" >"$response_file"; then
-    safe_error 'HTTPS UAPI structure probe failed'
-    rm -f -- "$response_file"
-    return 1
-  fi
-  if ! jq -e . "$response_file" >/dev/null 2>&1; then
-    safe_error 'Malformed UAPI JSON response'
-    rm -f -- "$response_file"
-    return 65
+  metadata_file="$(mktemp)"
+  local request_status
+  if perform_http_request "$response_file" "$metadata_file" 'UAPI structure probe' \
+    --get "${CPANEL_API_BASE_URL}/execute/${endpoint}" "$@"; then
+    :
+  else
+    request_status=$?
+    rm -f -- "$response_file" "$metadata_file"
+    return "$request_status"
   fi
   jq -c '{top_level_keys:(keys|sort),result_keys:(.result|keys|sort),status:.result.status,data_type:(.result.data|type),errors_type:(.result.errors|type)}' "$response_file"
-  rm -f -- "$response_file"
+  local status=$?
+  rm -f -- "$response_file" "$metadata_file"
+  return "$status"
 }
 
 poll_deployment() {

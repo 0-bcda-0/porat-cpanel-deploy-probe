@@ -17,6 +17,7 @@ grep -Fq 'workflow_dispatch:' "$workflow" || fail 'workflow is not manually disp
 grep -Fq 'runs-on: ubuntu-24.04' "$workflow" || fail 'workflow is not pinned to ubuntu-24.04'
 grep -Fq 'environment: development' "$workflow" || fail 'workflow is not bound to development'
 grep -Fq 'CPANEL_API_TOKEN: ${{ secrets.CPANEL_API_TOKEN }}' "$workflow" || fail 'workflow does not consume the dedicated secret'
+grep -Fq 'tests/test-audit-tooling.sh' "$workflow" || fail 'workflow does not run the missing-audit-tool regression'
 ! grep -Eq '^      CPANEL_CONTROLLER_CLONE_URL:' "$workflow" || fail 'controller clone URL leaks into local safety-test environment'
 grep -Eq '^          CPANEL_CONTROLLER_CLONE_URL: https://github.com/0-bcda-0/porat-cpanel-deploy-probe.git$' "$workflow" || fail 'live step lacks the exact controller clone URL'
 

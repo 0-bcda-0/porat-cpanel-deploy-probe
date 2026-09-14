@@ -48,10 +48,39 @@ mkdir -p "$test_root/bin"
 cat >"$test_root/bin/curl" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
-response="${MOCK_RESPONSE_DIR:?}/$(cat "${MOCK_COUNTER:?}").json"
-count="$(cat "${MOCK_COUNTER:?}")"
-printf '%s\n' "$((count + 1))" >"${MOCK_COUNTER:?}"
-cat "$response"
+
+output=''
+while (($#)); do
+  case "$1" in
+    --output)
+      output="$2"
+      shift 2
+      ;;
+    --write-out)
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+[[ -n "$output" ]] || { printf 'mock curl missing --output\n' >&2; exit 98; }
+
+if [[ -n "${MOCK_COUNTER:-}" ]]; then
+  count="$(cat "$MOCK_COUNTER")"
+  response="${MOCK_RESPONSE_DIR:?}/$count.json"
+  printf '%s\n' "$((count + 1))" >"$MOCK_COUNTER"
+  cat "$response" >"$output"
+else
+  printf '%s' "${MOCK_BODY:-}" >"$output"
+fi
+
+printf '%s\t%s\t%s\t%s' \
+  "${MOCK_HTTP_CODE:-200}" \
+  "${MOCK_CONTENT_TYPE:-application/json}" \
+  "${MOCK_REDIRECT_URL:-}" \
+  "${MOCK_EFFECTIVE_URL:-https://cp077.mydataknox.com:2083/execute/mock}"
 MOCK
 chmod +x "$test_root/bin/curl"
 
@@ -62,6 +91,7 @@ run_poll() {
     CPANEL_USER=echosline CPANEL_API_TOKEN=dummy CPANEL_CURL_BIN="$test_root/bin/curl" \
     CPANEL_POLL_INTERVAL_SECONDS=0 CPANEL_POLL_MAX_ATTEMPTS="$attempts" \
     MOCK_RESPONSE_DIR="$response_dir" MOCK_COUNTER="$test_root/counter" \
+    MOCK_HTTP_CODE=200 MOCK_CONTENT_TYPE=application/json \
     "$probe" poll-deployment 41
 }
 
@@ -80,6 +110,48 @@ set +e; run_poll "$test_root/timeout" 2 >"$test_root/timeout.out" 2>&1; status=$
 grep -Fq 'Polling timed out; deployment was not retriggered' "$test_root/timeout.out" || fail 'timeout safety message was missing'
 [[ "$(cat "$test_root/counter")" -eq 2 ]] || fail 'poller exceeded its attempt bound'
 pass 'bounded polling timeout without retrigger'
+
+mkdir -p "$test_root/http-success"
+printf '%s\n' '{"result":{"status":1,"data":[{"id":"41","state":"success"}],"errors":null}}' >"$test_root/http-success/0.json"
+run_poll "$test_root/http-success" 1 >"$test_root/http-success.out" 2>&1 || fail 'HTTP 200 JSON response did not pass'
+grep -Fq 'Deployment task 41 succeeded with status success' "$test_root/http-success.out" || fail 'HTTP 200 JSON response was not parsed'
+pass 'HTTP 2xx JSON accepted'
+
+run_http_failure() {
+  local label="$1" code="$2" content_type="$3" body="$4" redirect="${5:-}"
+  local output="$test_root/http-$label.out"
+  set +e
+  env CPANEL_API_BASE_URL=https://cp077.mydataknox.com:2083 \
+    CPANEL_USER=echosline CPANEL_API_TOKEN="$secret" CPANEL_CURL_BIN="$test_root/bin/curl" \
+    CPANEL_POLL_INTERVAL_SECONDS=0 CPANEL_POLL_MAX_ATTEMPTS=1 \
+    MOCK_HTTP_CODE="$code" MOCK_CONTENT_TYPE="$content_type" MOCK_BODY="$body" \
+    MOCK_REDIRECT_URL="$redirect" \
+    "$probe" poll-deployment 41 >"$output" 2>&1
+  status=$?
+  set -e
+  [[ $status -ne 0 ]] || fail "$label HTTP response was accepted"
+  ! grep -Fq "$secret" "$output" || fail "$label HTTP classification leaked token"
+  ! grep -Fq "$body" "$output" || fail "$label HTTP classification leaked raw response body"
+}
+
+html_body='<html><body>private diagnostic page</body></html>'
+run_http_failure html 200 text/html "$html_body"
+grep -Fq 'UAPI HTTP 2xx response was non-JSON: status=200 content_type=text/html' "$test_root/http-html.out" || fail 'HTTP 200 HTML was not safely classified'
+grep -Fq 'body_bytes=' "$test_root/http-html.out" || fail 'HTTP 200 HTML classification omitted byte count'
+grep -Fq 'body_sha256=' "$test_root/http-html.out" || fail 'HTTP 200 HTML classification omitted body hash'
+pass 'HTTP 2xx non-JSON classified without body disclosure'
+
+redirect_body='<html>redirect</html>'
+run_http_failure redirect 302 text/html "$redirect_body" "https://cp077.mydataknox.com:2083/login/?token=$secret"
+grep -Fq 'UAPI HTTP redirect rejected: status=302' "$test_root/http-redirect.out" || fail 'HTTP redirect was not rejected distinctly'
+pass 'HTTP 3xx redirect rejected without token disclosure'
+
+for code in 401 403; do
+  auth_body="access denied $code"
+  run_http_failure "auth-$code" "$code" text/html "$auth_body"
+  grep -Fq "UAPI HTTP authentication/access failure: status=$code" "$test_root/http-auth-$code.out" || fail "HTTP $code was not classified as auth/access failure"
+done
+pass 'HTTP 401/403 classified safely'
 
 cat >"$test_root/bin/no-network" <<'MOCK'
 #!/usr/bin/env bash
